@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -128,8 +130,8 @@ private fun AppRoot(vm: GameVm = viewModel()) {
                         game = game,
                         onGameChange = { vm.activeGame = it },
                         onExit = { nav.popBackStack() },
-                        onFinishGame = {
-                            // TODO: save to statistics (Room)
+                        onFinishGame = { save ->
+                            // TODO: save to statistics (Room) if save == true
                             vm.activeGame = null
                             nav.navigate("home") { popUpTo("home") { inclusive = true } }
                         }
@@ -278,7 +280,7 @@ private fun NewGameScreen(
                     }
 
                     Text(
-                        "При ничьей после последнего энда автоматически добавляется Extra End.",
+                        "При ничьей после последнего энда автоматически добавляется Extra End (ET).",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -313,19 +315,23 @@ private fun GameScreen(
     game: GameState,
     onGameChange: (GameState) -> Unit,
     onExit: () -> Unit,
-    onFinishGame: (GameState) -> Unit
+    onFinishGame: (save: Boolean) -> Unit
 ) {
     val cfg = game.config
     val isTablet = LocalConfiguration.current.screenWidthDp >= TABLET_MIN_WIDTH_DP
+    val context = LocalContext.current
+    val activity = context as? Activity
 
-    // Landscape lock only on phone
-    LockOrientationLandscape(enabled = !isTablet)
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
 
-    val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    LockOrientationLandscapeNoRestore(enabled = !isTablet)
 
     var viewMode by remember { mutableStateOf(ScoreViewMode.PER_END) }
     var undoStack by remember { mutableStateOf(listOf<UndoEntry>()) }
+    val scope = rememberCoroutineScope()
 
     // Timer
     var elapsedMs by remember { mutableStateOf(game.pausedElapsedMs) }
@@ -348,9 +354,9 @@ private fun GameScreen(
     }
 
     val firstUnset = remember(game.ends) { game.ends.indexOfFirst { !it.isSet } }
-    val highlightIndex = if (firstUnset == -1) game.ends.lastIndex else firstUnset
+    val currentEndIndex = if (firstUnset == -1) game.ends.lastIndex else firstUnset
+    val highlightIndex = currentEndIndex
 
-    // Extra End if tie after baseEnds and all ends set
     LaunchedEffect(firstUnset, total1, total2, game.ends.size, cfg.baseEnds) {
         val allSet = firstUnset == -1
         if (allSet && game.ends.size >= cfg.baseEnds && total1 == total2) {
@@ -388,23 +394,6 @@ private fun GameScreen(
         onGameChange(newGame)
 
         undoStack = undoStack + UndoEntry(endIndex, before, after, hammerBefore, hammerAfter)
-
-        val labelWinner = when (winner) {
-            SheetWinner.BLANK -> "Blank"
-            SheetWinner.P1 -> cfg.player1
-            SheetWinner.P2 -> cfg.player2
-        }
-        val msg = if (winner == SheetWinner.BLANK) "End ${endIndex + 1}: 0–0 (blank)"
-        else "End ${endIndex + 1}: $labelWinner +$points"
-
-        scope.launch {
-            val res = snackbarHostState.showSnackbar(
-                message = msg,
-                actionLabel = "UNDO",
-                withDismissAction = true
-            )
-            if (res == SnackbarResult.ActionPerformed) undoLast()
-        }
     }
 
     val displayedP1: List<Int> = remember(game.ends, viewMode) {
@@ -416,57 +405,37 @@ private fun GameScreen(
         if (viewMode == ScoreViewMode.PER_END) perEnd else perEnd.runningSum()
     }
 
-    // BottomSheet
-    var sheetOpen by remember { mutableStateOf(false) }
-    var sheetEndIndex by remember { mutableStateOf(0) }
-    var sheetWinner by remember { mutableStateOf(SheetWinner.P1) }
-    var sheetPoints by remember { mutableStateOf(1) }
+    // Score input dialog
+    var scoreDialogOpen by remember { mutableStateOf(false) }
+    var dlgEndIndex by remember { mutableStateOf(0) }
+    var dlgWinner by remember { mutableStateOf(SheetWinner.P1) }
+    var dlgPoints by remember { mutableStateOf(1) }
 
-    fun openSheetForCurrent() {
-        sheetEndIndex = highlightIndex
-        sheetWinner = SheetWinner.P1
-        sheetPoints = 1
-        sheetOpen = true
+    fun openScoreDialogForCurrent() {
+        dlgEndIndex = currentEndIndex
+        dlgWinner = SheetWinner.P1
+        dlgPoints = 1
+        scoreDialogOpen = true
     }
 
-    Scaffold(
-        containerColor = Color.Black,
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black),
-                navigationIcon = { IconButton(onClick = onExit) { Text("←", color = Color.White) } },
-                title = { Text("", color = Color.White) },
-                actions = {
-                    TextButton(onClick = { viewMode = ScoreViewMode.PER_END }) {
-                        Text("По эндам", color = if (viewMode == ScoreViewMode.PER_END) Color.White else Color.Gray)
-                    }
-                    TextButton(onClick = { viewMode = ScoreViewMode.CUMULATIVE }) {
-                        Text("Нарастающим", color = if (viewMode == ScoreViewMode.CUMULATIVE) Color.White else Color.Gray)
-                    }
+    // Finish dialog
+    var finishDialogOpen by remember { mutableStateOf(false) }
 
-                    Spacer(Modifier.width(12.dp))
+    fun restoreOrientation() {
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
 
-                    Box(
-                        modifier = Modifier
-                            .border(1.dp, Color(0xFF3A3A3D), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text(formatElapsed(elapsedMs), color = Color.White, fontWeight = FontWeight.Bold)
-                    }
+    fun exitToMenu() {
+        restoreOrientation()
+        onExit()
+    }
 
-                    Spacer(Modifier.width(12.dp))
+    fun finishGame(save: Boolean) {
+        restoreOrientation()
+        onFinishGame(save)
+    }
 
-                    Text(
-                        text = if (game.hammer == HammerOwner.P1) "HAMMER: ${cfg.player1}" else "HAMMER: ${cfg.player2}",
-                        color = Color(0xFFB0B0B0),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(Modifier.width(12.dp))
-                }
-            )
-        }
-    ) { padding ->
+    Scaffold(containerColor = Color.Black) { padding ->
         Box(
             modifier = Modifier
                 .padding(padding)
@@ -474,19 +443,65 @@ private fun GameScreen(
                 .background(Color.Black)
                 .padding(12.dp)
         ) {
-            OlympicScoreboardFitToWidth(
-                player1Name = cfg.player1,
-                player2Name = cfg.player2,
-                player1Color = cfg.color1,
-                player2Color = cfg.color2,
-                displayedP1 = displayedP1,
-                displayedP2 = displayedP2,
-                rawEnds = game.ends,
-                highlightIndex = highlightIndex,
-                total1 = total1,
-                total2 = total2,
-                hammerOwner = game.hammer
-            )
+            // Top overlay controls
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                OutlinedButton(
+                    onClick = { exitToMenu() },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    modifier = Modifier.height(54.dp)
+                ) {
+                    Text("← Меню", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Box(
+                        modifier = Modifier
+                            .border(2.dp, Color(0xFF3A3A3D), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            formatElapsed(elapsedMs),
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 28.sp
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "🥌 Hammer: " + if (game.hammer == HammerOwner.P1) cfg.player1 else cfg.player2,
+                        color = Color(0xFFB0B0B0),
+                        fontSize = 14.sp
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .padding(top = 70.dp, bottom = 78.dp)
+            ) {
+                OlympicScoreboardFitToWidth(
+                    player1Name = cfg.player1,
+                    player2Name = cfg.player2,
+                    player1Color = cfg.color1,
+                    player2Color = cfg.color2,
+                    displayedP1 = displayedP1,
+                    displayedP2 = displayedP2,
+                    rawEnds = game.ends,
+                    highlightIndex = highlightIndex,
+                    total1 = total1,
+                    total2 = total2,
+                    hammerOwner = game.hammer,
+                    baseEnds = cfg.baseEnds
+                )
+            }
 
             Row(
                 modifier = Modifier
@@ -495,7 +510,7 @@ private fun GameScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Button(
-                    onClick = { openSheetForCurrent() },
+                    onClick = { openScoreDialogForCurrent() },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D4CFF))
                 ) { Text("Ввести очки") }
@@ -508,123 +523,173 @@ private fun GameScreen(
                 ) { Text("Undo") }
 
                 OutlinedButton(
-                    onClick = {
-                        val allSet = game.ends.all { it.isSet }
-                        val canFinish = allSet && game.ends.size >= cfg.baseEnds && total1 != total2
-                        if (canFinish) onFinishGame(game)
-                        else scope.launch {
-                            snackbarHostState.showSnackbar("Нельзя завершить: нужен победитель. При ничьей будет extra end.")
-                        }
-                    },
+                    onClick = { finishDialogOpen = true },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                 ) { Text("Завершить") }
             }
         }
 
-        if (sheetOpen) {
-            ModalBottomSheet(onDismissRequest = { sheetOpen = false }) {
-                BottomSheetContentScrollable(
-                    cfg = cfg,
-                    endsCount = game.ends.size,
-                    currentSuggestedIndex = highlightIndex,
-                    selectedEndIndex = sheetEndIndex,
-                    onEndIndexChange = { sheetEndIndex = it },
-                    winner = sheetWinner,
-                    onWinnerChange = { sheetWinner = it },
-                    points = sheetPoints,
-                    onPointsChange = { sheetPoints = it },
-                    onConfirm = {
-                        val pts = if (sheetWinner == SheetWinner.BLANK) 0 else sheetPoints.coerceIn(1, cfg.maxPoints)
-                        applyScore(sheetEndIndex, sheetWinner, pts)
-                        sheetOpen = false
+        if (scoreDialogOpen) {
+            ScoreEntryDialog(
+                cfg = cfg,
+                endsCount = game.ends.size,
+                allowedMaxEndIndex = currentEndIndex,
+                selectedEndIndex = dlgEndIndex,
+                onEndIndexChange = { dlgEndIndex = it },
+                winner = dlgWinner,
+                onWinnerChange = { dlgWinner = it },
+                points = dlgPoints,
+                onPointsChange = { dlgPoints = it },
+                onDismiss = { scoreDialogOpen = false },
+                onConfirm = {
+                    val pts = if (dlgWinner == SheetWinner.BLANK) 0 else dlgPoints.coerceIn(1, cfg.maxPoints)
+                    applyScore(dlgEndIndex, dlgWinner, pts)
+                    scoreDialogOpen = false
+                }
+            )
+        }
+
+        if (finishDialogOpen) {
+            AlertDialog(
+                onDismissRequest = { finishDialogOpen = false },
+                title = { Text("Завершить игру?") },
+                text = { Text("Сохранить результат в статистику?") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            finishDialogOpen = false
+                            finishGame(save = true)
+                        }
+                    ) { Text("Сохранить и завершить") }
+                },
+                dismissButton = {
+                    Column(horizontalAlignment = Alignment.End) {
+                        TextButton(
+                            onClick = {
+                                finishDialogOpen = false
+                                finishGame(save = false)
+                            }
+                        ) { Text("Завершить без сохранения") }
+                        TextButton(onClick = { finishDialogOpen = false }) { Text("Отмена") }
                     }
-                )
-            }
+                }
+            )
         }
     }
 }
 
-/* ------------------------------ Bottom Sheet ------------------------------ */
+/* ------------------------------ Score Entry Dialog ------------------------------ */
 
 @Composable
-private fun BottomSheetContentScrollable(
+private fun ScoreEntryDialog(
     cfg: GameConfig,
     endsCount: Int,
-    currentSuggestedIndex: Int,
+    allowedMaxEndIndex: Int,
     selectedEndIndex: Int,
     onEndIndexChange: (Int) -> Unit,
     winner: SheetWinner,
     onWinnerChange: (SheetWinner) -> Unit,
     points: Int,
     onPointsChange: (Int) -> Unit,
+    onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-            .navigationBarsPadding(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("Ввод очков", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+    Dialog(onDismissRequest = onDismiss) {
+        // Semi-transparent scrim is handled by Dialog automatically; we style the card.
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F10))
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .border(1.dp, Color(0xFF3A3A3D), RoundedCornerShape(16.dp)),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Ввод очков", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color.White)
 
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Энд:", fontWeight = FontWeight.Medium)
-            EndIndexPicker(
-                endsCount = endsCount,
-                selected = selectedEndIndex,
-                suggested = currentSuggestedIndex,
-                onSelected = onEndIndexChange
-            )
-        }
+                Text("Энд", fontWeight = FontWeight.Medium, color = Color(0xFFB0B0B0))
+                EndIndexPickerLimited(
+                    endsCount = endsCount,
+                    allowedMaxIndex = allowedMaxEndIndex,
+                    selected = selectedEndIndex,
+                    onSelected = onEndIndexChange
+                )
 
-        Text("Кто взял энд?", fontWeight = FontWeight.Medium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = winner == SheetWinner.P1, onClick = { onWinnerChange(SheetWinner.P1) }, label = { Text(cfg.player1) })
-            FilterChip(selected = winner == SheetWinner.P2, onClick = { onWinnerChange(SheetWinner.P2) }, label = { Text(cfg.player2) })
-            FilterChip(selected = winner == SheetWinner.BLANK, onClick = { onWinnerChange(SheetWinner.BLANK) }, label = { Text("Blank 0–0") })
-        }
+                Text("Кто взял энд?", fontWeight = FontWeight.Medium, color = Color(0xFFB0B0B0))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilterChip(
+                        selected = winner == SheetWinner.P1,
+                        onClick = { onWinnerChange(SheetWinner.P1) },
+                        label = { Text(cfg.player1) }
+                    )
+                    FilterChip(
+                        selected = winner == SheetWinner.P2,
+                        onClick = { onWinnerChange(SheetWinner.P2) },
+                        label = { Text(cfg.player2) }
+                    )
+                    FilterChip(
+                        selected = winner == SheetWinner.BLANK,
+                        onClick = { onWinnerChange(SheetWinner.BLANK) },
+                        label = { Text("Blank 0–0") }
+                    )
+                }
 
-        if (winner != SheetWinner.BLANK) {
-            Text("Сколько очков? (1..${cfg.maxPoints})", fontWeight = FontWeight.Medium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                (1..cfg.maxPoints).forEach { v ->
-                    FilterChip(selected = points == v, onClick = { onPointsChange(v) }, label = { Text(v.toString()) })
+                if (winner != SheetWinner.BLANK) {
+                    Text("Очки (1..${cfg.maxPoints})", fontWeight = FontWeight.Medium, color = Color(0xFFB0B0B0))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        (1..cfg.maxPoints).forEach { v ->
+                            FilterChip(
+                                selected = points == v,
+                                onClick = { onPointsChange(v) },
+                                label = { Text(v.toString()) }
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                    ) { Text("Отмена") }
+
+                    Button(
+                        onClick = onConfirm,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D4CFF))
+                    ) { Text("Применить") }
                 }
             }
-        } else {
-            Text("Blank end: 0–0", color = Color.Gray)
         }
-
-        Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text("Применить") }
-        Spacer(Modifier.height(8.dp))
     }
 }
 
 @Composable
-private fun EndIndexPicker(
+private fun EndIndexPickerLimited(
     endsCount: Int,
+    allowedMaxIndex: Int,
     selected: Int,
-    suggested: Int,
     onSelected: (Int) -> Unit
 ) {
+    val maxIdx = allowedMaxIndex.coerceIn(0, endsCount - 1)
     Row(
         modifier = Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        for (i in 0 until endsCount) {
-            val isSuggested = i == suggested
+        for (i in 0..maxIdx) {
             FilterChip(
                 selected = selected == i,
                 onClick = { onSelected(i) },
-                label = {
-                    Text(
-                        text = (i + 1).toString(),
-                        fontWeight = if (isSuggested) FontWeight.Bold else FontWeight.Normal
-                    )
-                }
+                label = { Text((i + 1).toString()) }
             )
         }
     }
@@ -644,7 +709,8 @@ private fun OlympicScoreboardFitToWidth(
     highlightIndex: Int,
     total1: Int,
     total2: Int,
-    hammerOwner: HammerOwner
+    hammerOwner: HammerOwner,
+    baseEnds: Int
 ) {
     @Suppress("UnusedBoxWithConstraintsScope")
     BoxWithConstraints {
@@ -687,8 +753,9 @@ private fun OlympicScoreboardFitToWidth(
 
                 for (i in 0 until endsCount) {
                     val isHi = i == highlightIndex
+                    val label = if (i >= baseEnds) "ET" else (i + 1).toString()
                     ScoreCell(
-                        text = (i + 1).toString(),
+                        text = label,
                         width = cellW,
                         height = cellH,
                         bg = if (isHi) Color(0xFFFFF59D) else Color(0xFFF2F2F2),
@@ -775,9 +842,8 @@ private fun ScoreboardTeamRow(
                     )
             )
 
-            // Hammer near name
             if (showHammer) {
-                Text("  🔨", color = Color.White, fontSize = 14.sp)
+                Text("  🥌", color = Color.White, fontSize = 14.sp)
             } else {
                 Text("  ", color = Color.White, fontSize = 14.sp)
             }
@@ -868,15 +934,14 @@ private fun StatsPlaceholderScreen(onBack: () -> Unit) {
 /* ------------------------------ Helpers ------------------------------ */
 
 @Composable
-private fun LockOrientationLandscape(enabled: Boolean) {
+private fun LockOrientationLandscapeNoRestore(enabled: Boolean) {
     if (!enabled) return
     val context = LocalContext.current
     val activity = context as? Activity ?: return
 
     DisposableEffect(Unit) {
-        val prev = activity.requestedOrientation
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        onDispose { activity.requestedOrientation = prev }
+        onDispose { /* no restore to avoid loop */ }
     }
 }
 
