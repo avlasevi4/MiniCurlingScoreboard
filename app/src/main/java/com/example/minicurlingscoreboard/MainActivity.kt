@@ -8,6 +8,15 @@ import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,20 +25,28 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -123,10 +140,20 @@ private fun AppRoot(vm: GameVm = viewModel()) {
     MaterialTheme {
         val nav = rememberNavController()
 
-        NavHost(navController = nav, startDestination = "home") {
+        NavHost(
+            navController = nav,
+            startDestination = "home",
+            enterTransition = { fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 6 } },
+            exitTransition = { fadeOut(tween(180)) },
+            popEnterTransition = { fadeIn(tween(220)) },
+            popExitTransition = { fadeOut(tween(180)) + slideOutHorizontally(tween(180)) { it / 6 } }
+        ) {
             composable("home") {
+                val game = vm.activeGame
+                val continueSummary = remember(game) { game?.summaryText() }
                 HomeScreen(
-                    canContinue = vm.activeGame != null,
+                    canContinue = game != null,
+                    continueSummary = continueSummary,
                     onNewGame = { nav.navigate("newgame") },
                     onContinue = { nav.navigate("game") },
                     onStats = { nav.navigate("stats") }
@@ -186,6 +213,13 @@ private fun AppRoot(vm: GameVm = viewModel()) {
     }
 }
 
+private fun GameState.summaryText(): String {
+    val (t1, t2) = ends.fold(0 to 0) { acc, e -> if (!e.isSet) acc else (acc.first + e.p1) to (acc.second + e.p2) }
+    val firstUnset = ends.indexOfFirst { !it.isSet }
+    val currentEnd = if (firstUnset == -1) ends.size else firstUnset + 1
+    return "${config.player1} $t1:$t2 ${config.player2} · энд $currentEnd"
+}
+
 private fun newGameState(cfg: GameConfig): GameState {
     return GameState(
         config = cfg,
@@ -199,25 +233,149 @@ private fun newGameState(cfg: GameConfig): GameState {
 
 /* ------------------------------ Home ------------------------------ */
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val HomeBackground = Color(0xFF0B0B0E)
+private val HomeCardBg = Color(0xFF151518)
+private val HomeCardBorder = Color(0xFF232326)
+private val HomeIconBg = Color(0xFF1E1E22)
+private val HomeMuted = Color(0xFF9C9CA3)
+private val HomeSubtitle = Color(0xFF7A7A80)
+private val HomeAccent = Color(0xFF6D4CFF)
+
 @Composable
 private fun HomeScreen(
     canContinue: Boolean,
+    continueSummary: String?,
     onNewGame: () -> Unit,
     onContinue: () -> Unit,
     onStats: () -> Unit
 ) {
-    Scaffold(topBar = { TopAppBar(title = { Text("Мини-кёрлинг") }) }) { padding ->
+    val context = LocalContext.current
+    val dao = remember { (context.applicationContext as CurlingApp).database.gameResultDao() }
+    val games by dao.getAll().collectAsState(initial = null)
+    val statsSubtitle = when {
+        games == null -> "Загрузка…"
+        games!!.isEmpty() -> "Пока нет сыгранных игр"
+        else -> "Сыграно игр: ${games!!.size}"
+    }
+
+    Scaffold(containerColor = HomeBackground) { padding ->
         Column(
             modifier = Modifier
                 .padding(padding)
-                .padding(16.dp)
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(20.dp)
+                .fillMaxSize()
         ) {
-            Button(onClick = onNewGame, modifier = Modifier.fillMaxWidth()) { Text("Новая игра") }
-            Button(onClick = onContinue, enabled = canContinue, modifier = Modifier.fillMaxWidth()) { Text("Продолжить") }
-            OutlinedButton(onClick = onStats, modifier = Modifier.fillMaxWidth()) { Text("Статистика") }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 28.dp)
+            ) {
+                Image(
+                    painter = painterResource(R.mipmap.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("Мини-кёрлинг", color = Color(0xFFF2F2F2), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                    Text("v2.0 · онлайн-табло", color = HomeSubtitle, fontSize = 12.sp)
+                }
+            }
+
+            HomeActionCard(
+                index = 0,
+                icon = Icons.Filled.PlayArrow,
+                title = "Новая игра",
+                subtitle = "Настроить игроков и старт",
+                primary = true,
+                onClick = onNewGame
+            )
+            HomeActionCard(
+                index = 1,
+                icon = Icons.Filled.History,
+                title = "Продолжить",
+                subtitle = continueSummary ?: "Нет активной игры",
+                enabled = canContinue,
+                onClick = onContinue
+            )
+            HomeActionCard(
+                index = 2,
+                icon = Icons.Filled.BarChart,
+                title = "Статистика",
+                subtitle = statsSubtitle,
+                onClick = onStats
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeActionCard(
+    index: Int,
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    primary: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(60L * index)
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 3 }
+    ) {
+        val bg = if (primary) HomeAccent.copy(alpha = 0.16f) else HomeCardBg
+        val borderColor = if (primary) HomeAccent else HomeCardBorder
+        val iconBg = if (primary) HomeAccent else HomeIconBg
+        val iconTint = if (primary) Color.White else HomeMuted
+        val titleColor = if (primary) Color.White else Color(0xFFEDEDEE)
+        val subtitleColor = if (primary) Color(0xFFD8D2FF) else HomeSubtitle
+
+        Card(
+            onClick = onClick,
+            enabled = enabled,
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = bg, disabledContainerColor = bg),
+            border = BorderStroke(1.dp, borderColor),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .alpha(if (enabled) 1f else 0.5f)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(iconBg),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = iconTint)
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, color = titleColor, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Text(
+                        subtitle,
+                        color = subtitleColor,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = subtitleColor)
+            }
         }
     }
 }
