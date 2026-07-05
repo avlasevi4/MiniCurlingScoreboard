@@ -24,6 +24,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +66,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.minicurlingscoreboard.data.GameResult
+import com.example.minicurlingscoreboard.data.PlayerStats
 import com.example.minicurlingscoreboard.data.decodeEnds
 import com.example.minicurlingscoreboard.data.encodeEnds
 import kotlinx.coroutines.delay
@@ -258,6 +260,10 @@ private fun HomeScreen(
         games!!.isEmpty() -> "Пока нет сыгранных игр"
         else -> "Сыграно игр: ${games!!.size}"
     }
+    val versionName = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+            .getOrNull() ?: ""
+    }
 
     Scaffold(containerColor = HomeBackground) { padding ->
         Column(
@@ -280,7 +286,7 @@ private fun HomeScreen(
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("Мини-кёрлинг", color = Color(0xFFF2F2F2), fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                    Text("v2.0 · онлайн-табло", color = HomeSubtitle, fontSize = 12.sp)
+                    Text("v$versionName · онлайн-табло", color = HomeSubtitle, fontSize = 12.sp)
                 }
             }
 
@@ -1381,43 +1387,183 @@ private val statsDateFormatter = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.get
 private fun colorOrDefault(name: String, fallback: StoneColor): StoneColor =
     runCatching { StoneColor.valueOf(name) }.getOrDefault(fallback)
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StatsScreen(onBack: () -> Unit, onOpenGame: (Long) -> Unit) {
     val context = LocalContext.current
     val dao = remember { (context.applicationContext as CurlingApp).database.gameResultDao() }
-    val games by dao.getAll().collectAsState(initial = emptyList())
+    val games by dao.getAll().collectAsState(initial = null)
+    val playerStats by dao.getPlayerStats().collectAsState(initial = null)
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Статистика") },
-                navigationIcon = { IconButton(onClick = onBack) { Text("←") } }
-            )
+    var selectedTab by remember { mutableStateOf(0) }
+
+    Scaffold(containerColor = HomeBackground) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(20.dp)
+                    .padding(bottom = 8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(HomeIconBg)
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", tint = Color.White)
+                }
+                Spacer(Modifier.width(14.dp))
+                Text("Статистика", color = Color(0xFFF2F2F2), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            }
+
+            StatsTabRow(selectedTab = selectedTab, onSelect = { selectedTab = it })
+
+            when (selectedTab) {
+                0 -> GameHistoryList(games, onOpenGame)
+                else -> PlayerRatingList(playerStats)
+            }
         }
-    ) { padding ->
-        if (games.isEmpty()) {
-            Column(modifier = Modifier.padding(padding).padding(16.dp)) {
-                Text("Пока нет сохранённых игр.", fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun StatsTabRow(selectedTab: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(horizontal = 20.dp)
+            .padding(bottom = 12.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(HomeCardBg)
+            .border(1.dp, HomeCardBorder, RoundedCornerShape(14.dp))
+            .padding(4.dp)
+    ) {
+        StatsTabButton("История", selected = selectedTab == 0, onClick = { onSelect(0) }, modifier = Modifier.weight(1f))
+        StatsTabButton("Рейтинг", selected = selectedTab == 1, onClick = { onSelect(1) }, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun StatsTabButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) HomeAccent else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, color = if (selected) Color.White else HomeMuted, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun GameHistoryList(games: List<GameResult>?, onOpenGame: (Long) -> Unit) {
+    when {
+        games == null -> LoadingBox()
+        games.isEmpty() -> EmptyStateText(
+            "Пока нет сохранённых игр.",
+            "Завершите игру с сохранением, и она появится здесь."
+        )
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(games, key = { it.id }) { game ->
+                GameResultCard(game, onClick = { onOpenGame(game.id) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerRatingList(stats: List<PlayerStats>?) {
+    when {
+        stats == null -> LoadingBox()
+        stats.isEmpty() -> EmptyStateText(
+            "Пока нет данных для рейтинга.",
+            "Сыграйте и сохраните хотя бы одну игру."
+        )
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            itemsIndexed(stats, key = { _, s -> s.name }) { index, s ->
+                PlayerRankRow(rank = index + 1, stats = s)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingBox() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = HomeAccent)
+    }
+}
+
+@Composable
+private fun EmptyStateText(title: String, subtitle: String) {
+    Column(modifier = Modifier.padding(20.dp)) {
+        Text(title, color = Color(0xFFEDEDEE), fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(8.dp))
+        Text(subtitle, color = HomeSubtitle, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun PlayerRankRow(rank: Int, stats: PlayerStats) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = HomeCardBg),
+        border = BorderStroke(1.dp, HomeCardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(if (rank == 1) HomeAccent else HomeIconBg),
+                contentAlignment = Alignment.Center
+            ) {
                 Text(
-                    "Завершите игру с сохранением, и она появится здесь.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.Gray
+                    rank.toString(),
+                    color = if (rank == 1) Color.White else HomeMuted,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
                 )
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .padding(padding)
-                    .fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(games, key = { it.id }) { game ->
-                    GameResultCard(game, onClick = { onOpenGame(game.id) })
-                }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stats.name,
+                    color = Color(0xFFEDEDEE),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val drawsText = if (stats.draws > 0) " · Ничьих: ${stats.draws}" else ""
+                Text(
+                    "Матчей: ${stats.matches} · Побед: ${stats.wins} · Поражений: ${stats.losses}$drawsText",
+                    color = HomeSubtitle,
+                    fontSize = 12.sp
+                )
             }
+            Text("${stats.winPercent}%", color = HomeAccent, fontWeight = FontWeight.Medium, fontSize = 18.sp)
         }
     }
 }
@@ -1445,6 +1591,8 @@ private fun GameResultCard(game: GameResult, onClick: () -> Unit) {
 
     Card(
         shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = HomeCardBg),
+        border = BorderStroke(1.dp, HomeCardBorder),
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -1463,12 +1611,12 @@ private fun GameResultCard(game: GameResult, onClick: () -> Unit) {
                 Text(
                     statsDateFormatter.format(Date(game.playedAt)),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
+                    color = HomeSubtitle
                 )
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = Color.Gray
+                    tint = HomeSubtitle
                 )
             }
 
@@ -1477,16 +1625,16 @@ private fun GameResultCard(game: GameResult, onClick: () -> Unit) {
                 Text(
                     game.player1Name,
                     fontWeight = if (p1Wins) FontWeight.Bold else FontWeight.Normal,
-                    color = if (p1Wins) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                    color = if (p1Wins) HomeAccent else Color(0xFFEDEDEE),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
-                Text("${game.score1} : ${game.score2}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("${game.score1} : ${game.score2}", color = Color(0xFFEDEDEE), fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 Text(
                     game.player2Name,
                     fontWeight = if (p2Wins) FontWeight.Bold else FontWeight.Normal,
-                    color = if (p2Wins) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                    color = if (p2Wins) HomeAccent else Color(0xFFEDEDEE),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.End,
@@ -1498,7 +1646,7 @@ private fun GameResultCard(game: GameResult, onClick: () -> Unit) {
             Text(
                 "Длительность: ${formatElapsed(game.durationMs)}",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray
+                color = HomeSubtitle
             )
         }
     }
@@ -1506,48 +1654,61 @@ private fun GameResultCard(game: GameResult, onClick: () -> Unit) {
 
 /* ------------------------------ Stats detail ------------------------------ */
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StatsDetailScreen(gameId: Long, onBack: () -> Unit) {
     val context = LocalContext.current
     val dao = remember { (context.applicationContext as CurlingApp).database.gameResultDao() }
     val game by dao.getById(gameId).collectAsState(initial = null)
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Детали игры") },
-                navigationIcon = { IconButton(onClick = onBack) { Text("←") } }
-            )
-        }
-    ) { padding ->
-        val g = game
-        if (g == null) {
-            Box(modifier = Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
-            val color1 = remember(g.player1ColorName) { colorOrDefault(g.player1ColorName, StoneColor.RED) }
-            val color2 = remember(g.player2ColorName) { colorOrDefault(g.player2ColorName, StoneColor.BLUE) }
-            val winnerText = when {
-                g.score1 > g.score2 -> "Победитель: ${g.player1Name}"
-                g.score2 > g.score1 -> "Победитель: ${g.player2Name}"
-                else -> "Ничья"
-            }
-
-            Column(
-                modifier = Modifier
-                    .padding(padding)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+    Scaffold(containerColor = HomeBackground) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .padding(20.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 24.dp)
             ) {
-                Text(statsDateFormatter.format(Date(g.playedAt)), style = MaterialTheme.typography.bodyMedium)
-                Text("Длительность: ${formatElapsed(g.durationMs)}", style = MaterialTheme.typography.bodyMedium)
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(HomeIconBg)
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", tint = Color.White)
+                }
+                Spacer(Modifier.width(14.dp))
+                Text("Детали игры", color = Color(0xFFF2F2F2), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            }
 
-                GameResultScoreboard(game = g, color1 = color1, color2 = color2)
+            val g = game
+            if (g == null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = HomeAccent)
+                }
+            } else {
+                val color1 = remember(g.player1ColorName) { colorOrDefault(g.player1ColorName, StoneColor.RED) }
+                val color2 = remember(g.player2ColorName) { colorOrDefault(g.player2ColorName, StoneColor.BLUE) }
+                val winnerText = when {
+                    g.score1 > g.score2 -> "Победитель: ${g.player1Name}"
+                    g.score2 > g.score1 -> "Победитель: ${g.player2Name}"
+                    else -> "Ничья"
+                }
 
-                Text(winnerText, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(statsDateFormatter.format(Date(g.playedAt)), color = Color(0xFFEDEDEE), style = MaterialTheme.typography.bodyMedium)
+                    Text("Длительность: ${formatElapsed(g.durationMs)}", color = Color(0xFFEDEDEE), style = MaterialTheme.typography.bodyMedium)
+
+                    GameResultScoreboard(game = g, color1 = color1, color2 = color2)
+
+                    Text(winnerText, color = Color(0xFFF2F2F2), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                }
             }
         }
     }
