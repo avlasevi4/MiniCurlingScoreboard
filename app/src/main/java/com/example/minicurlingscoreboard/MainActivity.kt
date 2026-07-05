@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -152,6 +153,11 @@ internal class GameVm(application: Application) : AndroidViewModel(application) 
     fun updateActiveGame(game: GameState?) {
         activeGame = game
         saveActiveGame(getApplication(), game)
+    }
+
+    fun saveGameResult(result: GameResult) {
+        val dao = (getApplication<Application>() as CurlingApp).database.gameResultDao()
+        viewModelScope.launch { dao.insert(result) }
     }
 }
 
@@ -270,16 +276,13 @@ private fun AppRoot(vm: GameVm = viewModel()) {
                         nav.navigate("home") { popUpTo("home") { inclusive = true } }
                     }
                 } else {
-                    val context = LocalContext.current
-                    val scope = rememberCoroutineScope()
                     GameScreen(
                         game = game,
                         onGameChange = { vm.updateActiveGame(it) },
                         onExit = { nav.popBackStack() },
                         onFinishGame = { result ->
                             if (result != null) {
-                                val dao = (context.applicationContext as CurlingApp).database.gameResultDao()
-                                scope.launch { dao.insert(result) }
+                                vm.saveGameResult(result)
                             }
                             vm.updateActiveGame(null)
                             nav.navigate("home") { popUpTo("home") { inclusive = true } }
