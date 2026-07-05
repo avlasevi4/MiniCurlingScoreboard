@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.BarChart
@@ -382,7 +383,6 @@ private fun HomeActionCard(
 
 /* ------------------------------ New Game ------------------------------ */
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NewGameScreen(
     onBack: () -> Unit,
@@ -403,100 +403,127 @@ private fun NewGameScreen(
         return trimmed.take(MAX_NAME_LEN)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Новая игра") },
-                navigationIcon = { IconButton(onClick = onBack) { Text("←") } }
-            )
-        }
-    ) { padding ->
+    Scaffold(containerColor = HomeBackground) { padding ->
         Column(
             modifier = Modifier
                 .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = player1,
-                    onValueChange = { player1 = clampName(it) },
-                    label = { Text("Игрок 1 (до $MAX_NAME_LEN)") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                OutlinedTextField(
-                    value = player2,
-                    onValueChange = { player2 = clampName(it) },
-                    label = { Text("Игрок 2 (до $MAX_NAME_LEN)") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ColorPickerField(
-                    title = "Цвет ${player1.ifBlank { "Игрок 1" }}",
-                    selected = color1,
-                    onSelected = { c: StoneColor ->
-                        color1 = c
-                        if (color2 == c) color2 = StoneColor.entries.firstOrNull { it != c } ?: color2
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                ColorPickerField(
-                    title = "Цвет ${player2.ifBlank { "Игрок 2" }}",
-                    selected = color2,
-                    onSelected = { c: StoneColor ->
-                        color2 = c
-                        if (color1 == c) color1 = StoneColor.entries.firstOrNull { it != c } ?: color1
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Card(shape = RoundedCornerShape(12.dp)) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 24.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(HomeIconBg)
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("Настройки до начала игры", fontWeight = FontWeight.Bold)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", tint = Color.White)
+                }
+                Spacer(Modifier.width(14.dp))
+                Text("Новая игра", color = Color(0xFFF2F2F2), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            }
 
-                    Text("Эндов: $baseEnds (1..10)", fontWeight = FontWeight.Medium)
-                    Slider(
-                        value = baseEnds.toFloat(),
-                        onValueChange = { baseEnds = it.toInt().coerceIn(1, 10) },
-                        valueRange = 1f..10f,
-                        steps = 8
+            HomeSectionCard(title = "Игроки") {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DarkNameField(
+                        value = player1,
+                        onValueChange = { player1 = clampName(it) },
+                        label = "Игрок 1",
+                        modifier = Modifier.weight(1f)
                     )
-
-                    Text("Максимум очков в энде (и камней): $maxPoints (4..8)", fontWeight = FontWeight.Medium)
-                    Slider(
-                        value = maxPoints.toFloat(),
-                        onValueChange = { maxPoints = it.toInt().coerceIn(4, 8) },
-                        valueRange = 4f..8f,
-                        steps = 3
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        (4..8).forEach { v ->
-                            FilterChip(
-                                selected = maxPoints == v,
-                                onClick = { maxPoints = v },
-                                label = { Text(v.toString()) }
-                            )
-                        }
-                    }
-
-                    Text(
-                        "При ничьей после последнего энда автоматически добавляется Extra End (ET).",
-                        style = MaterialTheme.typography.bodySmall
+                    DarkNameField(
+                        value = player2,
+                        onValueChange = { player2 = clampName(it) },
+                        label = "Игрок 2",
+                        modifier = Modifier.weight(1f)
                     )
                 }
+
+                Spacer(Modifier.height(4.dp))
+
+                ColorSwatchRow(
+                    label = player1.ifBlank { "Игрок 1" },
+                    selected = color1,
+                    onSelected = { c ->
+                        color1 = c
+                        if (color2 == c) color2 = StoneColor.entries.firstOrNull { it != c } ?: color2
+                    }
+                )
+                ColorSwatchRow(
+                    label = player2.ifBlank { "Игрок 2" },
+                    selected = color2,
+                    onSelected = { c ->
+                        color2 = c
+                        if (color1 == c) color1 = StoneColor.entries.firstOrNull { it != c } ?: color1
+                    }
+                )
             }
 
-            Button(
+            Spacer(Modifier.height(14.dp))
+
+            HomeSectionCard(title = "Настройки до начала игры") {
+                Text("Эндов: $baseEnds (1..10)", color = Color(0xFFEDEDEE), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                Slider(
+                    value = baseEnds.toFloat(),
+                    onValueChange = { baseEnds = it.toInt().coerceIn(1, 10) },
+                    valueRange = 1f..10f,
+                    steps = 8,
+                    colors = SliderDefaults.colors(
+                        thumbColor = HomeAccent,
+                        activeTrackColor = HomeAccent,
+                        inactiveTrackColor = HomeCardBorder
+                    )
+                )
+
+                Text(
+                    "Максимум очков в энде (и камней): $maxPoints (4..8)",
+                    color = Color(0xFFEDEDEE),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
+                )
+                Slider(
+                    value = maxPoints.toFloat(),
+                    onValueChange = { maxPoints = it.toInt().coerceIn(4, 8) },
+                    valueRange = 4f..8f,
+                    steps = 3,
+                    colors = SliderDefaults.colors(
+                        thumbColor = HomeAccent,
+                        activeTrackColor = HomeAccent,
+                        inactiveTrackColor = HomeCardBorder
+                    )
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (4..8).forEach { v ->
+                        val isSel = maxPoints == v
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSel) HomeAccent else HomeIconBg)
+                                .clickable { maxPoints = v },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(v.toString(), color = if (isSel) Color.White else HomeMuted, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
+                Text(
+                    "При ничьей после последнего энда автоматически добавляется Extra End (ET).",
+                    color = HomeSubtitle,
+                    fontSize = 12.sp
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Card(
                 onClick = {
                     val name1 = player1.ifBlank { "Игрок 1" }.take(MAX_NAME_LEN)
                     val name2 = player2.ifBlank { "Игрок 2" }.take(MAX_NAME_LEN)
@@ -515,9 +542,94 @@ private fun NewGameScreen(
                         )
                     )
                 },
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = HomeAccent),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Начать игру")
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Начать игру", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun HomeSectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = HomeCardBg),
+        border = BorderStroke(1.dp, HomeCardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(title, color = Color(0xFFF2F2F2), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun DarkNameField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        singleLine = true,
+        modifier = modifier,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color(0xFFEDEDEE),
+            focusedBorderColor = HomeAccent,
+            unfocusedBorderColor = HomeCardBorder,
+            focusedLabelColor = HomeAccent,
+            unfocusedLabelColor = HomeSubtitle,
+            cursorColor = HomeAccent,
+            focusedContainerColor = HomeIconBg,
+            unfocusedContainerColor = HomeIconBg
+        )
+    )
+}
+
+@Composable
+private fun ColorSwatchRow(
+    label: String,
+    selected: StoneColor,
+    onSelected: (StoneColor) -> Unit
+) {
+    Column {
+        Text("Цвет: $label", color = HomeSubtitle, fontSize = 12.sp)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StoneColor.entries.forEach { color ->
+                val isSel = color == selected
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(color.uiColor)
+                        .border(
+                            width = if (isSel) 2.dp else 1.dp,
+                            color = if (isSel) HomeAccent else HomeCardBorder,
+                            shape = CircleShape
+                        )
+                        .clickable { onSelected(color) }
+                )
             }
         }
     }
@@ -1587,64 +1699,3 @@ private fun formatElapsed(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
 
-/* ------------------------------ Color Picker ------------------------------ */
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ColorPickerField(
-    title: String,
-    selected: StoneColor,
-    onSelected: (StoneColor) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }, modifier = modifier) {
-        OutlinedTextField(
-            value = selected.label,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(title) },
-            singleLine = true,
-            leadingIcon = {
-                Box(
-                    modifier = Modifier
-                        .size(16.dp)
-                        .background(selected.uiColor, RoundedCornerShape(50))
-                        .border(
-                            width = 1.dp,
-                            color = if (selected == StoneColor.WHITE) Color.Gray else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                )
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = selected.uiColor.copy(alpha = 0.18f),
-                unfocusedContainerColor = selected.uiColor.copy(alpha = 0.12f)
-            ),
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth()
-        )
-
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            StoneColor.entries.forEach { color ->
-                DropdownMenuItem(
-                    leadingIcon = {
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .background(color.uiColor, RoundedCornerShape(50))
-                                .border(
-                                    width = 1.dp,
-                                    color = if (color == StoneColor.WHITE) Color.Gray else Color.Transparent,
-                                    shape = RoundedCornerShape(50)
-                                )
-                        )
-                    },
-                    text = { Text(color.label) },
-                    onClick = { onSelected(color); expanded = false }
-                )
-            }
-        }
-    }
-}
