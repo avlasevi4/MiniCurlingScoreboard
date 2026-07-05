@@ -1,6 +1,7 @@
 package com.example.minicurlingscoreboard
 
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.os.Bundle
@@ -58,7 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -89,6 +90,18 @@ private const val MAX_NAME_LEN = 12
 private const val PREFS_NAME = "game_prefs"
 private const val PREF_PLAYER1_NAME = "player1_name"
 private const val PREF_PLAYER2_NAME = "player2_name"
+
+private const val PREF_ACTIVE_PLAYER1 = "active_player1"
+private const val PREF_ACTIVE_PLAYER2 = "active_player2"
+private const val PREF_ACTIVE_COLOR1 = "active_color1"
+private const val PREF_ACTIVE_COLOR2 = "active_color2"
+private const val PREF_ACTIVE_MAX_POINTS = "active_max_points"
+private const val PREF_ACTIVE_BASE_ENDS = "active_base_ends"
+private const val PREF_ACTIVE_HAMMER = "active_hammer"
+private const val PREF_ACTIVE_STARTED_AT = "active_started_at"
+private const val PREF_ACTIVE_TIMER_RUNNING = "active_timer_running"
+private const val PREF_ACTIVE_PAUSED_ELAPSED = "active_paused_elapsed"
+private const val PREF_ACTIVE_ENDS = "active_ends"
 
 internal enum class ScoreViewMode { PER_END, CUMULATIVE }
 internal enum class HammerOwner { P1, P2 }
@@ -132,8 +145,85 @@ internal data class UndoEntry(
     val hammerAfter: HammerOwner
 )
 
-internal class GameVm : ViewModel() {
-    var activeGame by mutableStateOf<GameState?>(null)
+internal class GameVm(application: Application) : AndroidViewModel(application) {
+    var activeGame by mutableStateOf(loadActiveGame(application))
+        private set
+
+    fun updateActiveGame(game: GameState?) {
+        activeGame = game
+        saveActiveGame(getApplication(), game)
+    }
+}
+
+private fun saveActiveGame(context: Context, game: GameState?) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    if (game == null) {
+        prefs.edit()
+            .remove(PREF_ACTIVE_PLAYER1)
+            .remove(PREF_ACTIVE_PLAYER2)
+            .remove(PREF_ACTIVE_COLOR1)
+            .remove(PREF_ACTIVE_COLOR2)
+            .remove(PREF_ACTIVE_MAX_POINTS)
+            .remove(PREF_ACTIVE_BASE_ENDS)
+            .remove(PREF_ACTIVE_HAMMER)
+            .remove(PREF_ACTIVE_STARTED_AT)
+            .remove(PREF_ACTIVE_TIMER_RUNNING)
+            .remove(PREF_ACTIVE_PAUSED_ELAPSED)
+            .remove(PREF_ACTIVE_ENDS)
+            .apply()
+        return
+    }
+    val endsEncoded = game.ends.joinToString(";") { "${it.p1},${it.p2},${if (it.isSet) 1 else 0}" }
+    prefs.edit()
+        .putString(PREF_ACTIVE_PLAYER1, game.config.player1)
+        .putString(PREF_ACTIVE_PLAYER2, game.config.player2)
+        .putString(PREF_ACTIVE_COLOR1, game.config.color1.name)
+        .putString(PREF_ACTIVE_COLOR2, game.config.color2.name)
+        .putInt(PREF_ACTIVE_MAX_POINTS, game.config.maxPoints)
+        .putInt(PREF_ACTIVE_BASE_ENDS, game.config.baseEnds)
+        .putString(PREF_ACTIVE_HAMMER, game.hammer.name)
+        .putLong(PREF_ACTIVE_STARTED_AT, game.startedAtElapsedMs)
+        .putBoolean(PREF_ACTIVE_TIMER_RUNNING, game.isTimerRunning)
+        .putLong(PREF_ACTIVE_PAUSED_ELAPSED, game.pausedElapsedMs)
+        .putString(PREF_ACTIVE_ENDS, endsEncoded)
+        .apply()
+}
+
+private fun loadActiveGame(context: Context): GameState? {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val player1 = prefs.getString(PREF_ACTIVE_PLAYER1, null) ?: return null
+    val player2 = prefs.getString(PREF_ACTIVE_PLAYER2, null) ?: return null
+    val endsEncoded = prefs.getString(PREF_ACTIVE_ENDS, null)
+    if (endsEncoded.isNullOrBlank()) return null
+
+    val ends = runCatching {
+        endsEncoded.split(";").map { entry ->
+            val parts = entry.split(",")
+            EndScore(p1 = parts[0].toInt(), p2 = parts[1].toInt(), isSet = parts[2] == "1")
+        }
+    }.getOrNull()
+    if (ends.isNullOrEmpty()) return null
+
+    val color1 = colorOrDefault(prefs.getString(PREF_ACTIVE_COLOR1, null) ?: "", StoneColor.RED)
+    val color2 = colorOrDefault(prefs.getString(PREF_ACTIVE_COLOR2, null) ?: "", StoneColor.BLUE)
+    val hammer = runCatching { HammerOwner.valueOf(prefs.getString(PREF_ACTIVE_HAMMER, null) ?: "") }
+        .getOrDefault(HammerOwner.P1)
+
+    return GameState(
+        config = GameConfig(
+            player1 = player1,
+            player2 = player2,
+            color1 = color1,
+            color2 = color2,
+            maxPoints = prefs.getInt(PREF_ACTIVE_MAX_POINTS, 4),
+            baseEnds = prefs.getInt(PREF_ACTIVE_BASE_ENDS, 10)
+        ),
+        ends = ends,
+        hammer = hammer,
+        startedAtElapsedMs = prefs.getLong(PREF_ACTIVE_STARTED_AT, SystemClock.elapsedRealtime()),
+        isTimerRunning = prefs.getBoolean(PREF_ACTIVE_TIMER_RUNNING, false),
+        pausedElapsedMs = prefs.getLong(PREF_ACTIVE_PAUSED_ELAPSED, 0L)
+    )
 }
 
 /* ------------------------------ Root + Nav ------------------------------ */
@@ -167,7 +257,7 @@ private fun AppRoot(vm: GameVm = viewModel()) {
                 NewGameScreen(
                     onBack = { nav.popBackStack() },
                     onStart = { cfg ->
-                        vm.activeGame = newGameState(cfg)
+                        vm.updateActiveGame(newGameState(cfg))
                         nav.navigate("game")
                     }
                 )
@@ -184,14 +274,14 @@ private fun AppRoot(vm: GameVm = viewModel()) {
                     val scope = rememberCoroutineScope()
                     GameScreen(
                         game = game,
-                        onGameChange = { vm.activeGame = it },
+                        onGameChange = { vm.updateActiveGame(it) },
                         onExit = { nav.popBackStack() },
                         onFinishGame = { result ->
                             if (result != null) {
                                 val dao = (context.applicationContext as CurlingApp).database.gameResultDao()
                                 scope.launch { dao.insert(result) }
                             }
-                            vm.activeGame = null
+                            vm.updateActiveGame(null)
                             nav.navigate("home") { popUpTo("home") { inclusive = true } }
                         }
                     )
